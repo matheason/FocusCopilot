@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "FocusCopilot",
+  "version": "1.0",
+  "description": "An intelligent browser extension that tracks time and boosts focus.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "idle"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  }
+}
