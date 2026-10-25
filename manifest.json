@@ -6,13 +6,14 @@
   "permissions": [
     "tabs",
     "storage",
-    "idle"
+    "idle",
+    "alarms"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "popup/popup.html",
     "default_icon": "icon.png"
   }
 }

@@ -1,70 +1,135 @@
-let activeTabId = null;
-let activeUrl = null;
-let startTime = Date.now();
-
-// 1. 保存当前网站已停留的时间
-function saveCurrentSession() {
-  if (!activeUrl) return;
-  const duration = Math.floor((Date.now() - startTime) / 1000); // 转换为秒
-  if (duration < 1) return;
-
+// 初始化或获取当前状态
+async function initSession() {
   try {
-    const urlObj = new URL(activeUrl);
-    const domain = urlObj.hostname; // 获取域名，例如 github.com
-    if (!domain || domain.startsWith('edge://') || domain.startsWith('chrome://')) return;
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0) {
+      const tab = tabs[0];
+      const url = tab.url;
+      const now = Date.now();
 
-    chrome.storage.local.get([domain], (result) => {
-      const totalTime = (result[domain] || 0) + duration;
-      chrome.storage.local.set({ [domain]: totalTime }, () => {
-        console.log(`[FocusCopilot] 记录: ${domain} +${duration}s (累计: ${totalTime}s)`);
+      // 将初始状态存入 storage，防止 Service Worker 休眠丢失
+      chrome.storage.local.set({
+        activeUrl: url,
+        lastCheckTime: now
       });
-    });
+    }
   } catch (e) {
-    // 忽略无效的 URL（如 chrome:// 内部页面）
+    console.error('[FocusCopilot] 初始化失败:', e);
   }
 }
 
-// 2. 切换标签页时触发
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  saveCurrentSession();
-  
-  activeTabId = activeInfo.tabId;
-  startTime = Date.now();
-  
-  try {
-    const tab = await chrome.tabs.get(activeTabId);
-    activeUrl = tab.url;
-  } catch (e) {
-    activeUrl = null;
+// 插件安装或启动时初始化
+chrome.runtime.onInstalled.addListener(() => {
+  initSession();
+});
+initSession();
+
+// 1. 保存当前网站已停留的时间（基于 storage 中的时间戳计算，完美抗 Service Worker 休眠）
+function saveCurrentSession() {
+  chrome.storage.local.get(['activeUrl', 'lastCheckTime'], (data) => {
+    const activeUrl = data.activeUrl;
+    const lastCheckTime = data.lastCheckTime;
+
+    if (!activeUrl || !lastCheckTime) return;
+
+    const now = Date.now();
+    const duration = Math.floor((now - lastCheckTime) / 1000); // 计算精准秒数差
+
+    // 更新上一次检查时间戳，防止重复计算
+    chrome.storage.local.set({ lastCheckTime: now });
+
+    if (duration < 1) return;
+
+    try {
+      const urlObj = new URL(activeUrl);
+      const domain = urlObj.hostname;
+
+      // 过滤无效域名和浏览器内部页面
+      if (!domain || domain.startsWith('edge://') || domain.startsWith('chrome://') || domain.startsWith('about:')) {
+        return;
+      }
+
+      // 获取当前日期和小时
+      const dateObj = new Date();
+      const dateKey = dateObj.toISOString().split('T')[0]; // 例如 "2026-10-24"
+      const hourKey = dateObj.getHours().toString();        // 例如 "17"
+
+      // 读取并累加历史记录
+      chrome.storage.local.get(['history'], (result) => {
+        const history = result.history || {};
+
+        if (!history[dateKey]) history[dateKey] = { hours: {} };
+        if (!history[dateKey].hours) history[dateKey].hours = {};
+        if (!history[dateKey].hours[hourKey]) history[dateKey].hours[hourKey] = {};
+
+        const currentDomainTime = history[dateKey].hours[hourKey][domain] || 0;
+        history[dateKey].hours[hourKey][domain] = currentDomainTime + duration;
+
+        chrome.storage.local.set({ history }, () => {
+          console.log(`[FocusCopilot] 存档成功 [${dateKey} ${hourKey}点]: ${domain} +${duration}s`);
+        });
+      });
+    } catch (e) {
+      // 忽略无效 URL
+    }
+  });
+}
+
+// 2. 设置定时器：每隔 1 分钟自动触发一次存档
+chrome.alarms.get('autoSaveAlarm', (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create('autoSaveAlarm', { periodInMinutes: 1 });
   }
 });
 
-// 3. 标签页更新（比如在当前标签页输入新网址或跳转）
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tabId === activeTabId && changeInfo.url) {
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'autoSaveAlarm') {
     saveCurrentSession();
-    activeUrl = changeInfo.url;
-    startTime = Date.now();
   }
 });
 
-// 4. 浏览器窗口焦点改变（比如最小化浏览器或切换到其他软件）
+// 3. 切换标签页时触发
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  saveCurrentSession(); // 先保存上一个标签页的时间
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    chrome.storage.local.set({
+      activeUrl: tab.url || null,
+      lastCheckTime: Date.now()
+    });
+  } catch (e) {
+    chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
+  }
+});
+
+// 4. 标签页网址更新时触发
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tab.active && changeInfo.url) {
+    saveCurrentSession();
+    chrome.storage.local.set({
+      activeUrl: changeInfo.url,
+      lastCheckTime: Date.now()
+    });
+  }
+});
+
+// 5. 浏览器窗口焦点改变时触发
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    // 用户切出浏览器
     saveCurrentSession();
-    activeUrl = null;
+    chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
   } else {
-    // 用户切回浏览器
-    startTime = Date.now();
+    saveCurrentSession();
     try {
       const tabs = await chrome.tabs.query({ active: true, windowId: windowId });
       if (tabs.length > 0) {
-        activeTabId = tabs[0].id;
-        activeUrl = tabs[0].url;
+        chrome.storage.local.set({
+          activeUrl: tabs[0].url,
+          lastCheckTime: Date.now()
+        });
       }
     } catch (e) {
-      activeUrl = null;
+      chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
     }
   }
 });

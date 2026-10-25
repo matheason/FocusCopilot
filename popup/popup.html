@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>FocusCopilot</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="header">
+  <div class="brand">
+    <span class="logo">🚀</span>
+    <span class="title">FocusCopilot</span>
+  </div>
+  <button id="clear-btn" class="icon-btn" title="清空统计数据">🗑️</button>
+</div>
+
+<div class="stat-card">
+  <div class="stat-item">
+    <div class="stat-value" id="total-time">0 秒</div>
+    <div class="stat-label">今日总浏览时长</div>
+  </div>
+</div>
+
+<div class="section-title">
+  <span>网页时间明细</span>
+  <span class="sub-label" id="site-count">0 个站点</span>
+</div>
+
+<ul id="stats-list" class="stats-list">
+  <li class="empty-tip">暂无浏览数据</li>
+</ul>
+<button id="open-dashboard-btn" class="full-btn">📊 打开完整数据看板</button>
+
+<script src="popup.js"></script>
+</body>
+</html>
