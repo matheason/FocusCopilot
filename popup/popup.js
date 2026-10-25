@@ -90,5 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // 打开分类管理页面
+  const classificationBtn = document.getElementById('classification-btn');
+  if (classificationBtn) {
+    classificationBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('popup/classification.html') });
+    });
+  }
+
   loadStats();
 });
