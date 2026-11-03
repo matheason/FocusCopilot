@@ -1,3 +1,19 @@
+function localDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// 先让后台结算当前正在计时的这段时间，再读数据
+function flushThen(fn) {
+  try {
+    chrome.runtime.sendMessage({ type: 'flush' }, () => {
+      void chrome.runtime.lastError;
+      fn();
+    });
+  } catch (e) {
+    fn();
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const listEl = document.getElementById('stats-list');
   const totalTimeEl = document.getElementById('total-time');
@@ -38,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get(['history'], (result) => {
       listEl.innerHTML = '';
       const history = result.history || {};
-      const todayKey = new Date().toISOString().split('T')[0]; // 例如 "2026-10-24"
+      const todayKey = localDateKey(new Date());
 
       const todayDomainTotals = getDailyAggregate(history, todayKey);
       const domains = Object.keys(todayDomainTotals);
@@ -60,12 +76,17 @@ document.addEventListener('DOMContentLoaded', () => {
         grandTotalSeconds += seconds;
 
         const li = document.createElement('li');
-        li.innerHTML = `
-          <div class="domain-info">
-            <span class="domain-name" title="${domain}">${domain}</span>
-          </div>
-          <span class="time-badge">${formatTime(seconds)}</span>
-        `;
+        const info = document.createElement('div');
+        info.className = 'domain-info';
+        const name = document.createElement('span');
+        name.className = 'domain-name';
+        name.title = domain;
+        name.textContent = domain;
+        info.appendChild(name);
+        const badge = document.createElement('span');
+        badge.className = 'time-badge';
+        badge.textContent = formatTime(seconds);
+        li.append(info, badge);
         listEl.appendChild(li);
       });
 
@@ -98,5 +119,5 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  loadStats();
+  flushThen(loadStats);
 });

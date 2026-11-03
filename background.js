@@ -1,135 +1,188 @@
-// 初始化或获取当前状态
-async function initSession() {
-  try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs.length > 0) {
-      const tab = tabs[0];
-      const url = tab.url;
-      const now = Date.now();
+// FocusCopilot 计时核心
+//
+// 设计思路：不再依赖"事件 → 改状态"的增量逻辑（容易丢事件、竞态、Service Worker 重启后状态错乱），
+// 而是每次触发（任何事件或每分钟的心跳）都执行一次 tick()：
+//   1. 把「上次 tick → 现在」这段时间记到上次正在看的页面上；
+//   2. 重新从浏览器读取真实状态（哪个窗口有焦点、哪个标签页激活、用户是否闲置），决定接下来记给谁。
+// 所有 tick 串行执行，避免并发读写 storage 导致时间被覆盖或丢失。
 
-      // 将初始状态存入 storage，防止 Service Worker 休眠丢失
-      chrome.storage.local.set({
-        activeUrl: url,
-        lastCheckTime: now
-      });
-    }
+const ALARM_NAME = 'focusTick';
+const TICK_MINUTES = 0.5;            // 心跳间隔（Chrome/Edge 120+ 支持 30 秒）
+const IDLE_SECONDS = 300;            // 5 分钟无键鼠操作视为离开（读 PDF 时留足时间）
+const MAX_GAP_MS = 3 * 60 * 1000;    // 两次 tick 间隔超过此值视为浏览器关闭/电脑休眠，丢弃这段时间
+
+chrome.idle.setDetectionInterval(IDLE_SECONDS);
+
+// ---------- 工具函数 ----------
+
+// 本地日期 key（原来用 toISOString 是 UTC，在中国早上 8 点前的数据会记到前一天）
+function localDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function fileNameFromPath(path) {
+  const name = decodeURIComponent(path).split(/[\\/]/).filter(Boolean).pop();
+  return name || 'Local File';
+}
+
+// 把 URL 转成统计用的 key；返回 null 表示不统计
+function urlToKey(url) {
+  if (!url) return null;
+  let u;
+  try {
+    u = new URL(url);
   } catch (e) {
-    console.error('[FocusCopilot] 初始化失败:', e);
+    return null;
+  }
+
+  switch (u.protocol) {
+    case 'http:':
+    case 'https:': {
+      // 本地开发服务器保留端口，便于区分不同项目
+      const isLocal = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+      return isLocal ? u.host : u.hostname;
+    }
+    case 'file:':
+      // 本地 PDF / HTML / 图片等，按文件名统计
+      return `file: ${fileNameFromPath(u.pathname)}`;
+    case 'chrome-extension:':
+    case 'extension:': {
+      // 第三方 PDF 阅读器插件（如 PDF.js）通常形如 .../viewer.html?file=<真实地址>
+      const inner = u.searchParams.get('file') || u.searchParams.get('src');
+      if (inner) return urlToKey(inner);
+      return null; // 其它插件页面（包括本插件的看板）不统计
+    }
+    default:
+      // chrome://, edge://, about:, devtools:// 等浏览器内部页面不统计
+      return null;
   }
 }
 
-// 插件安装或启动时初始化
-chrome.runtime.onInstalled.addListener(() => {
-  initSession();
-});
-initSession();
+function addSeconds(history, dateKey, hourKey, key, seconds) {
+  if (seconds <= 0) return;
+  const day = (history[dateKey] = history[dateKey] || {});
+  const hours = (day.hours = day.hours || {});
+  const hour = (hours[hourKey] = hours[hourKey] || {});
+  hour[key] = (hour[key] || 0) + seconds;
+}
 
-// 1. 保存当前网站已停留的时间（基于 storage 中的时间戳计算，完美抗 Service Worker 休眠）
-function saveCurrentSession() {
-  chrome.storage.local.get(['activeUrl', 'lastCheckTime'], (data) => {
-    const activeUrl = data.activeUrl;
-    const lastCheckTime = data.lastCheckTime;
+// 把 [startMs, endMs) 这段时间记到 key 上，跨小时/跨天时按边界拆分
+function creditTime(history, key, startMs, endMs) {
+  let t = startMs;
+  while (t < endMs) {
+    const d = new Date(t);
+    const nextHour = new Date(d);
+    nextHour.setMinutes(0, 0, 0);
+    nextHour.setHours(nextHour.getHours() + 1);
+    const chunkEnd = Math.min(endMs, nextHour.getTime());
+    const seconds = Math.round((chunkEnd - t) / 1000);
+    addSeconds(history, localDateKey(d), String(d.getHours()), key, seconds);
+    t = chunkEnd;
+  }
+}
 
-    if (!activeUrl || !lastCheckTime) return;
+// 读取浏览器当前真实状态，返回当前应该计时的 key（null 表示不计时）
+async function detectCurrentKey() {
+  let win;
+  try {
+    win = await chrome.windows.getLastFocused({ populate: true, windowTypes: ['normal', 'popup'] });
+  } catch (e) {
+    return null;
+  }
+  // 浏览器窗口没有焦点（用户切到别的软件了）
+  if (!win || !win.focused || win.state === 'minimized') return null;
 
-    const now = Date.now();
-    const duration = Math.floor((now - lastCheckTime) / 1000); // 计算精准秒数差
+  const tab = (win.tabs || []).find((t) => t.active);
+  if (!tab) return null;
 
-    // 更新上一次检查时间戳，防止重复计算
-    chrome.storage.local.set({ lastCheckTime: now });
+  const idleState = await chrome.idle.queryState(IDLE_SECONDS);
+  // 闲置/锁屏时，只有正在播放声音（看网课/视频）才继续计时
+  if (idleState !== 'active' && !tab.audible) return null;
+  if (idleState === 'locked') return null;
 
-    if (duration < 1) return;
+  return urlToKey(tab.pendingUrl || tab.url);
+}
 
-    try {
-      const urlObj = new URL(activeUrl);
-      const domain = urlObj.hostname;
+// ---------- 核心 tick（串行执行） ----------
 
-      // 过滤无效域名和浏览器内部页面
-      if (!domain || domain.startsWith('edge://') || domain.startsWith('chrome://') || domain.startsWith('about:')) {
-        return;
-      }
+let queue = Promise.resolve();
 
-      // 获取当前日期和小时
-      const dateObj = new Date();
-      const dateKey = dateObj.toISOString().split('T')[0]; // 例如 "2026-10-24"
-      const hourKey = dateObj.getHours().toString();        // 例如 "17"
+function tick(reason) {
+  queue = queue.then(() => doTick(reason)).catch((e) => {
+    console.error('[FocusCopilot] tick 失败:', e);
+  });
+  return queue;
+}
 
-      // 读取并累加历史记录
-      chrome.storage.local.get(['history'], (result) => {
-        const history = result.history || {};
+async function doTick(reason) {
+  const now = Date.now();
+  const { tracker, history = {} } = await chrome.storage.local.get(['tracker', 'history']);
 
-        if (!history[dateKey]) history[dateKey] = { hours: {} };
-        if (!history[dateKey].hours) history[dateKey].hours = {};
-        if (!history[dateKey].hours[hourKey]) history[dateKey].hours[hourKey] = {};
-
-        const currentDomainTime = history[dateKey].hours[hourKey][domain] || 0;
-        history[dateKey].hours[hourKey][domain] = currentDomainTime + duration;
-
-        chrome.storage.local.set({ history }, () => {
-          console.log(`[FocusCopilot] 存档成功 [${dateKey} ${hourKey}点]: ${domain} +${duration}s`);
-        });
-      });
-    } catch (e) {
-      // 忽略无效 URL
+  let changedHistory = false;
+  if (tracker && tracker.key && tracker.since) {
+    const gap = now - tracker.since;
+    if (gap > 0 && gap <= MAX_GAP_MS) {
+      creditTime(history, tracker.key, tracker.since, now);
+      changedHistory = true;
+    } else if (gap > MAX_GAP_MS) {
+      console.log(`[FocusCopilot] 间隔 ${Math.round(gap / 1000)}s 过长（休眠/关闭浏览器），已丢弃`);
     }
+  }
+
+  const key = await detectCurrentKey();
+  const toSave = { tracker: { key, since: now } };
+  if (changedHistory) toSave.history = history;
+  await chrome.storage.local.set(toSave);
+
+  if (!tracker || tracker.key !== key) {
+    console.log(`[FocusCopilot] (${reason}) 计时对象: ${tracker?.key ?? '无'} → ${key ?? '无'}`);
+  }
+}
+
+// ---------- 事件监听：所有事件都只是触发一次 tick ----------
+
+function ensureAlarm() {
+  chrome.alarms.get(ALARM_NAME, (alarm) => {
+    if (!alarm) chrome.alarms.create(ALARM_NAME, { periodInMinutes: TICK_MINUTES });
   });
 }
 
-// 2. 设置定时器：每隔 1 分钟自动触发一次存档
-chrome.alarms.get('autoSaveAlarm', (alarm) => {
-  if (!alarm) {
-    chrome.alarms.create('autoSaveAlarm', { periodInMinutes: 1 });
-  }
+chrome.runtime.onInstalled.addListener(() => {
+  ensureAlarm();
+  // 清理旧版本遗留的状态字段
+  chrome.storage.local.remove(['activeUrl', 'lastCheckTime']);
+  chrome.alarms.clear('autoSaveAlarm');
+  tick('installed');
+});
+chrome.runtime.onStartup.addListener(() => {
+  ensureAlarm();
+  tick('startup');
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'autoSaveAlarm') {
-    saveCurrentSession();
-  }
+  if (alarm.name === ALARM_NAME) tick('alarm');
 });
 
-// 3. 切换标签页时触发
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  saveCurrentSession(); // 先保存上一个标签页的时间
-  try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    chrome.storage.local.set({
-      activeUrl: tab.url || null,
-      lastCheckTime: Date.now()
-    });
-  } catch (e) {
-    chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
-  }
-});
-
-// 4. 标签页网址更新时触发
+chrome.tabs.onActivated.addListener(() => tick('tab-activated'));
+chrome.tabs.onRemoved.addListener(() => tick('tab-removed'));
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tab.active && changeInfo.url) {
-    saveCurrentSession();
-    chrome.storage.local.set({
-      activeUrl: changeInfo.url,
-      lastCheckTime: Date.now()
-    });
+  if (tab.active && (changeInfo.url || 'audible' in changeInfo || changeInfo.status === 'complete')) {
+    tick('tab-updated');
+  }
+});
+chrome.windows.onFocusChanged.addListener(() => tick('focus-changed'));
+chrome.idle.onStateChanged.addListener((state) => tick(`idle-${state}`));
+
+// popup / 看板打开时先结算一次，确保显示的数据包含当前正在进行的这段时间
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === 'flush') {
+    tick('flush').then(() => sendResponse({ ok: true }));
+    return true;
   }
 });
 
-// 5. 浏览器窗口焦点改变时触发
-chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    saveCurrentSession();
-    chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
-  } else {
-    saveCurrentSession();
-    try {
-      const tabs = await chrome.tabs.query({ active: true, windowId: windowId });
-      if (tabs.length > 0) {
-        chrome.storage.local.set({
-          activeUrl: tabs[0].url,
-          lastCheckTime: Date.now()
-        });
-      }
-    } catch (e) {
-      chrome.storage.local.set({ activeUrl: null, lastCheckTime: Date.now() });
-    }
-  }
-});
+// Service Worker 每次被唤醒都会执行到这里：只确保心跳存在，不重置计时起点
+ensureAlarm();

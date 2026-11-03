@@ -1,3 +1,19 @@
+function localDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// 先让后台结算当前正在计时的这段时间，再读数据
+function flushThen(fn) {
+  try {
+    chrome.runtime.sendMessage({ type: 'flush' }, () => {
+      void chrome.runtime.lastError;
+      fn();
+    });
+  } catch (e) {
+    fn();
+  }
+}
+
 let myChart = null;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -37,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function loadDashboardData() {
         chrome.storage.local.get(['history'], (result) => {
             const history = result.history || {};
-            const todayKey = new Date().toISOString().split('T')[0];
+            const todayKey = localDateKey(new Date());
             const todayTotals = getDailyAggregate(history, todayKey);
             const domains = Object.keys(todayTotals);
 
@@ -46,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 totalSitesEl.textContent = '0';
                 topSiteEl.textContent = '-';
                 tableBodyEl.innerHTML = '<tr><td colspan="3" class="empty-cell">今日暂无浏览数据</td></tr>';
-                if (myChart) myChart.destroy();
+                if (myChart) { myChart.destroy(); myChart = null; }
                 return;
             }
 
@@ -69,7 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-          <td><strong>${domain}</strong></td>
+          <td><strong></strong></td>
           <td>${formatTime(seconds)}</td>
           <td style="width: 120px;">
             ${percentage}%
@@ -78,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </td>
         `;
+                tr.querySelector('strong').textContent = domain;
                 tableBodyEl.appendChild(tr);
             });
 
@@ -88,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 渲染环形图
     function renderChart(domains, totals) {
+        if (typeof Chart === 'undefined') return; // Chart.js 未加载时只显示表格
         const ctx = document.getElementById('timeChart').getContext('2d');
 
         const topDomains = domains.slice(0, 5);
@@ -128,7 +146,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    refreshBtn.addEventListener('click', loadDashboardData);
+    refreshBtn.addEventListener('click', () => flushThen(loadDashboardData));
     clearBtn.addEventListener('click', () => {
         if (confirm('确定要清空所有的历史浏览记录吗？')) {
             chrome.storage.local.clear(() => {
@@ -137,5 +155,5 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    loadDashboardData();
+    flushThen(loadDashboardData);
 });
