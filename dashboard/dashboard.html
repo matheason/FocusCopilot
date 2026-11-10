@@ -22,64 +22,154 @@
         </div>
     </header>
 
-    <!-- 顶部概览卡片组 -->
-    <div class="metrics-grid">
-        <div class="card metric-card">
-            <div class="metric-icon" style="background: #e0e7ff; color: #4f46e5;">⏱️</div>
-            <div class="metric-info">
-                <span class="metric-label">今日浏览总时长</span>
-                <h2 id="total-time" class="metric-value">0 秒</h2>
-            </div>
-        </div>
-        <div class="card metric-card">
-            <div class="metric-icon" style="background: #fce7f3; color: #ec4899;">🌐</div>
-            <div class="metric-info">
-                <span class="metric-label">已访问站点数</span>
-                <h2 id="total-sites" class="metric-value">0</h2>
-            </div>
-        </div>
-        <div class="card metric-card">
-            <div class="metric-icon" style="background: #fef3c7; color: #d97706;">👑</div>
-            <div class="metric-info">
-                <span class="metric-label">最常访问网站</span>
-                <h2 id="top-site" class="metric-value">-</h2>
-            </div>
-        </div>
-    </div>
+    <nav class="tabs">
+        <button class="tab active" data-tab="today">📅 今日概览</button>
+        <button class="tab" data-tab="week">📈 每周分类</button>
+        <button class="tab" data-tab="settings">⚙️ 分类与目标</button>
+    </nav>
 
-    <!-- 主体区域：图表 + 排行榜 -->
-    <div class="main-content">
-        <!-- 图表区域 -->
-        <div class="card chart-section">
-            <h3>📊 网站时间分布图</h3>
-            <div class="chart-container">
-                <canvas id="timeChart"></canvas>
+    <!-- ========== 今日概览 ========== -->
+    <section id="tab-today" class="tab-panel active">
+        <div class="metrics-grid">
+            <div class="card metric-card">
+                <div class="metric-icon" style="background: #e0e7ff; color: #4f46e5;">⏱️</div>
+                <div class="metric-info">
+                    <span class="metric-label">今日浏览总时长</span>
+                    <h2 id="total-time" class="metric-value">0 秒</h2>
+                </div>
+            </div>
+            <div class="card metric-card">
+                <div class="metric-icon" style="background: #fce7f3; color: #ec4899;">🌐</div>
+                <div class="metric-info">
+                    <span class="metric-label">已访问站点数</span>
+                    <h2 id="total-sites" class="metric-value">0</h2>
+                </div>
+            </div>
+            <div class="card metric-card">
+                <div class="metric-icon" style="background: #fef3c7; color: #d97706;">👑</div>
+                <div class="metric-info">
+                    <span class="metric-label">最常访问网站</span>
+                    <h2 id="top-site" class="metric-value">-</h2>
+                </div>
             </div>
         </div>
 
-        <!-- 数据列表区域 -->
-        <div class="card list-section">
-            <h3>🏆 网站耗时排行榜</h3>
-            <div class="table-wrapper">
+        <div class="main-content">
+            <div class="card chart-section">
+                <h3>📊 网站时间分布图</h3>
+                <div class="chart-container">
+                    <canvas id="timeChart"></canvas>
+                </div>
+            </div>
+
+            <div class="card list-section">
+                <h3>🏆 网站耗时排行榜</h3>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                        <tr>
+                            <th>域名</th>
+                            <th>类别</th>
+                            <th>耗时</th>
+                            <th>占比</th>
+                        </tr>
+                        </thead>
+                        <tbody id="table-body">
+                        <tr>
+                            <td colspan="4" class="empty-cell">加载中...</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== 每周分类 ========== -->
+    <section id="tab-week" class="tab-panel">
+        <div class="week-nav">
+            <button id="prev-week" class="btn btn-secondary">‹ 上一周</button>
+            <span id="week-label" class="week-label">-</span>
+            <button id="next-week" class="btn btn-secondary">下一周 ›</button>
+            <button id="this-week" class="btn btn-secondary">回到本周</button>
+        </div>
+
+        <h3 class="block-title">🎯 目标完成情况</h3>
+        <div id="goal-grid" class="goal-grid"></div>
+
+        <div class="main-content">
+            <div class="card chart-section">
+                <h3>📊 每日分类时长</h3>
+                <div class="chart-container">
+                    <canvas id="weekChart"></canvas>
+                </div>
+            </div>
+            <div class="card list-section">
+                <h3>🗂️ 本周分类汇总</h3>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                        <tr>
+                            <th>类别</th>
+                            <th>本周耗时</th>
+                            <th>占比</th>
+                        </tr>
+                        </thead>
+                        <tbody id="week-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ========== 分类与目标 ========== -->
+    <section id="tab-settings" class="tab-panel">
+        <div class="card">
+            <div class="card-head">
+                <h3>🏷️ 分类 & 目标</h3>
+                <button id="add-category" class="btn btn-primary">＋ 新建分类</button>
+            </div>
+            <p class="hint">目标类型：「至少」适合学习/工作（达到才算完成），「最多」适合娱乐（不超过才算完成）。修改后自动保存。</p>
+            <div id="category-list" class="category-list"></div>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <div class="card-head">
+                <h3>🌐 网站归类</h3>
+            </div>
+            <p class="hint">规则按域名匹配，<code>bilibili.com</code> 也会匹配 <code>www.bilibili.com</code>、<code>live.bilibili.com</code>。也可以填本地文件夹，例如 <code>D:\Docs\Study</code>，该文件夹（含子文件夹）下打开的所有文件都归到这个类别。修改规则后历史数据会按新规则重新统计。</p>
+            <div class="rule-add">
+                <input id="rule-input" type="text" placeholder="输入域名或本地文件夹，例如 bilibili.com 或 D:\Docs\Study">
+                <select id="rule-category"></select>
+                <button id="rule-add-btn" class="btn btn-primary">添加规则</button>
+            </div>
+
+            <h4 class="sub-title">已访问过的网站 <span class="sub-label">（直接选择类别即可）</span></h4>
+            <div class="rule-filter">
+                <input id="site-search" type="text" placeholder="搜索网站…">
+                <label><input id="only-uncategorized" type="checkbox"> 只看未分类</label>
+            </div>
+            <div class="table-wrapper tall">
                 <table class="data-table">
                     <thead>
                     <tr>
-                        <th>域名</th>
-                        <th>耗时</th>
-                        <th>占比</th>
+                        <th>网站</th>
+                        <th>累计时长</th>
+                        <th>匹配规则</th>
+                        <th>类别</th>
                     </tr>
                     </thead>
-                    <tbody id="table-body">
-                    <tr>
-                        <td colspan="3" class="empty-cell">加载中...</td>
-                    </tr>
-                    </tbody>
+                    <tbody id="site-table-body"></tbody>
                 </table>
             </div>
+
+            <h4 class="sub-title">所有规则</h4>
+            <div id="rule-list" class="rule-list"></div>
         </div>
-    </div>
+    </section>
 </div>
 
+<script src="../shared/categories.js"></script>
 <script src="dashboard.js"></script>
 </body>
 </html>

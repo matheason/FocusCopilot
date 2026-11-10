@@ -97,8 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 清空所有历史数据
   clearBtn.addEventListener('click', () => {
-    if (confirm('确定要清空所有的历史浏览记录吗？')) {
-      chrome.storage.local.clear(() => {
+    if (confirm('确定要清空所有的历史浏览记录吗？（分类和目标设置会保留）')) {
+      chrome.storage.local.remove(['history', 'tracker'], () => {
         loadStats();
       });
     }
@@ -111,11 +111,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 打开分类管理页面
+  // 打开分类管理（看板的「分类与目标」页）
   const classificationBtn = document.getElementById('classification-btn');
   if (classificationBtn) {
     classificationBtn.addEventListener('click', () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL('popup/classification.html') });
+      chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#settings') });
     });
   }
 

@@ -23,9 +23,19 @@ function localDateKey(d) {
   return `${y}-${m}-${day}`;
 }
 
-function fileNameFromPath(path) {
-  const name = decodeURIComponent(path).split(/[\\/]/).filter(Boolean).pop();
-  return name || 'Local File';
+// 把 file:// URL 转成完整本地路径，例如 file:///D:/Docs/a.pdf → D:/Docs/a.pdf
+// 保存完整路径，这样分类规则可以按文件夹前缀匹配（打开某个文件夹下的文件就归到某个类别）
+function localPathFromUrl(u) {
+  let path;
+  try {
+    path = decodeURIComponent(u.pathname);
+  } catch (e) {
+    path = u.pathname;
+  }
+  path = path.replace(/\\/g, '/');
+  if (/^\/[a-zA-Z]:\//.test(path)) path = path.slice(1); // Windows 盘符
+  if (u.host) path = `//${u.host}${path}`;              // 网络共享 file://server/share/...
+  return path || 'Local File';
 }
 
 // 把 URL 转成统计用的 key；返回 null 表示不统计
@@ -46,8 +56,8 @@ function urlToKey(url) {
       return isLocal ? u.host : u.hostname;
     }
     case 'file:':
-      // 本地 PDF / HTML / 图片等，按文件名统计
-      return `file: ${fileNameFromPath(u.pathname)}`;
+      // 本地 PDF / HTML / 图片等，按完整路径统计
+      return `file: ${localPathFromUrl(u)}`;
     case 'chrome-extension:':
     case 'extension:': {
       // 第三方 PDF 阅读器插件（如 PDF.js）通常形如 .../viewer.html?file=<真实地址>
